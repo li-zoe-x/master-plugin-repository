@@ -23,26 +23,61 @@ Verify:
 
 If either check fails, stop and tell the user: "Run `/official-plugins:package-plugin` first to prepare your plugin." Do not proceed.
 
-## 1. Validate (always)
+## 1. Validate (always, strict mode) — THE GATE
+
+This is the **only gate** between low-quality submissions and the marketplace. Do not skip it. Do not weaken it. Do not let the participant talk you into bypassing it.
 
 Run via Bash:
 
 ```
-node ${CLAUDE_PLUGIN_ROOT}/scripts/validate.mjs --plugin <PLUGIN_DIR> --json
+node ${CLAUDE_PLUGIN_ROOT}/scripts/validate.mjs --plugin <PLUGIN_DIR> --strict --json
 ```
+
+The `--strict` flag turns on the **quality gate** in addition to the format gate. The combined check covers:
+
+**Format gates** (always errors):
+- `plugin.json` exists, parses, has kebab-case `name` matching directory
+- Every `skills/<name>/SKILL.md` has YAML frontmatter with matching `name`
+- No path traversal (`..`) in any string field
+- Marketplace `source` shapes are well-formed (only relevant for `--marketplace`/`--all`)
+- Plugin name unique within marketplace
+
+**Quality gates** (errors in `--strict`, warnings otherwise):
+- **`SKILL_DESCRIPTION_MISSING`** — every skill must have a description
+- **`SKILL_DESCRIPTION_STYLE`** — descriptions must follow `"This skill should be used when the user asks to ..."` (third-person trigger-phrase convention). Vague descriptions undertrigger.
+- **`SKILL_DESCRIPTION_PLACEHOLDER`** — `{{...}}` left unfilled in a SKILL.md description
+- **`PLUGIN_DESCRIPTION_MISSING`** — plugin.json must have a description
+- **`QUALITY_DESCRIPTION_TOO_SHORT`** — plugin.json description must be ≥ 20 characters (catches "test", "demo", "todo")
+- **`QUALITY_NO_COMPONENTS`** — plugin must ship at least one component (skill, command, agent, hook, or MCP server). A plugin with only `plugin.json` + `README` is not a plugin.
+- **`QUALITY_TEMPLATE_PLACEHOLDER`** — `{{...}}` left unfilled in any plugin.json field
+- **`QUALITY_SECRET_PATTERN`** — files contain a string matching known secret formats (OpenAI/Anthropic API keys, GitHub PATs, AWS keys, Google keys, Slack tokens, JWTs). This is the single most common cause of compliance rejection.
+
+Read full reference at `references/quality-gates.md` for detailed explanation of each.
+
+### Parse and decide
 
 Parse the JSON output line by line. Each line is one finding with `severity`, `file`, `line`, `code`, `message`, `why`, `fix`.
 
-If any **errors** are present:
-- Print them all in the human-readable format used by `package-plugin`
-- Stop. Tell the user: "Submission blocked. Run `/official-plugins:package-plugin` to fix these, then re-invoke me."
-- Do NOT offer to fix them inline — that's package-plugin's job, and it owns the resume state.
+**If any `error` severity findings exist** (note: in `--strict` mode, quality issues come back as errors, not warnings):
 
-If only **warnings**:
+1. Print every error in this format:
+   ```
+   BLOCKED  <file>:<line>  [<code>]
+            <message>
+            Why: <why>
+            Fix: <fix>
+   ```
+2. Print a summary line: `SUBMISSION BLOCKED — N errors. Fix every error and re-invoke me.`
+3. **STOP**. Do not proceed to any other phase.
+4. Tell the participant: "Run `/official-plugins:package-plugin` against `<PLUGIN_DIR>` to fix these issues with guided edits, then invoke `/official-plugins:submit-plugin` again."
+5. Do **NOT** offer to bypass the gate. Do **NOT** offer to fix inline. Do **NOT** ask "want to proceed anyway?". The gate exists to protect the marketplace from low-quality submissions and the OKX brand from compliance incidents — bypassing it defeats its purpose.
+
+**If all findings are `warning` severity** (this should be rare in strict mode — most relevant warnings are promoted to errors):
 - Print them
-- Ask whether to proceed anyway. Recommend fixing in package-plugin first if any are about description style (a hackathon judge will notice an undertriggering skill).
+- Ask: "These are warnings, not blockers. Proceed? [yes/no]"
+- If yes, continue. If no, stop.
 
-If clean: continue.
+**If clean**: print `Validation passed: 0 errors, 0 warnings under --strict.` and continue to phase 2.
 
 ## 2. Detect git remote (for external mode hint)
 
@@ -195,15 +230,16 @@ git checkout -b submit/<plugin-name>
   ```
 - Append to marketplace.json.
 
-## 11. Validate the fork
+## 11. Validate the fork (strict)
 
-Run the validator inside the clone before committing:
+Run the validator inside the clone before committing — once over the whole marketplace, plus once again over the specific plugin in strict mode:
 
 ```
 node plugins/official-plugins/scripts/validate.mjs --all
+node plugins/official-plugins/scripts/validate.mjs --plugin plugins/<plugin-name> --strict
 ```
 
-If errors: stop, report them, do NOT commit. The PR would fail CI anyway.
+If errors from either run: stop, report them, do NOT commit. The PR would fail CI anyway. This second validation pass catches issues that may have been introduced by the copy/edit (e.g., a path-traversal that only manifests once the plugin lives at `plugins/<name>/` instead of its source location).
 
 ## 12. Show diff and confirm
 

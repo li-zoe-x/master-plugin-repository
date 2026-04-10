@@ -119,22 +119,58 @@ A line in the frontmatter doesn't parse as `key: value` or `key: [list]`.
 - **Why**: skill frontmatter must use simple `key: value` pairs (the validator only handles this subset)
 - **Fix**: rewrite the line as `key: value` or `key: [item, item]`
 
-## Warnings (do not block submission, but recommended to fix)
+## Quality gates (warnings during package-plugin authoring, errors when submit-plugin runs --strict)
+
+These catch low-quality submissions. `package-plugin` reports them as warnings so you can iterate. `submit-plugin` runs the validator with `--strict` and treats them as errors that block submission. **Fix them before invoking submit-plugin.**
+
+For the full reference of every quality gate with the rationale and fix, see `../../submit-plugin/references/quality-gates.md`.
+
+### `SKILL_DESCRIPTION_MISSING`
+A SKILL.md has no `description` field in its frontmatter.
+- **Why**: skills without descriptions never trigger
+- **Fix**: add a `description` starting with `"This skill should be used when the user asks to ..."`
+
+### `SKILL_DESCRIPTION_STYLE`
+A SKILL.md description doesn't follow the third-person trigger-phrase convention.
+- **Why**: vague descriptions undertrigger — Claude won't invoke the skill in real conversations
+- **Fix**: rewrite as `"This skill should be used when the user asks to '<phrase>', '<phrase>', ..."`
+
+### `SKILL_DESCRIPTION_PLACEHOLDER`
+A SKILL.md description still contains `{{...}}` from the template.
+- **Why**: you generated from `templates/SKILL.md.template` but forgot to fill in description fields
+- **Fix**: replace every `{{...}}` with concrete trigger phrases for this skill
+
+### `PLUGIN_DESCRIPTION_MISSING`
+plugin.json has no `description`.
+- **Why**: the marketplace UI shows description to participants browsing plugins
+- **Fix**: add a one-line description (~20-100 chars) of what your plugin does
+
+### `QUALITY_DESCRIPTION_TOO_SHORT`
+plugin.json description is non-empty but shorter than 20 characters.
+- **Why**: catches descriptions like "test", "demo", "todo" — too vague to be useful
+- **Fix**: expand to a full sentence describing what the plugin does
+
+### `QUALITY_NO_COMPONENTS`
+The plugin has no skills, no commands, no agents, no hooks, and no MCP servers.
+- **Why**: a plugin with only `plugin.json` + `README` does nothing — it's not a plugin
+- **Fix**: add at least one component: `skills/<name>/SKILL.md`, `commands/<name>.md`, `agents/<name>.md`, `hooks/hooks.json`, or an `mcpServers` field in plugin.json
+
+### `QUALITY_TEMPLATE_PLACEHOLDER`
+A plugin.json string field still contains `{{...}}` from the template.
+- **Why**: you generated plugin.json from `templates/plugin.json.template` but forgot to fill in some fields. Unfilled placeholders appear literally in the marketplace UI.
+- **Fix**: open plugin.json and replace every `{{...}}` with the real value
+
+### `QUALITY_SECRET_PATTERN`
+A file in the plugin contains a string matching a known secret format (OpenAI/Anthropic API key, GitHub PAT, AWS key, Google key, Slack token, JWT).
+- **Why**: secrets in committed plugin files leak credentials and violate OKX compliance — **the single biggest reason a submission is rejected**
+- **Fix**: (1) remove the secret from the file, (2) **rotate the credential at the source**, (3) refactor to read from environment variables at runtime, never hardcode
+
+## Pure warnings (always non-blocking)
 
 ### `PLUGIN_VERSION_FORMAT`
 plugin.json `version` is present but not semver.
 - **Why**: tools that diff plugin updates rely on semver ordering
 - **Fix**: use `X.Y.Z` format, e.g. `0.1.0`
-
-### `PLUGIN_DESCRIPTION_MISSING`
-plugin.json has no `description`.
-- **Why**: the marketplace UI shows description to users browsing plugins
-- **Fix**: add a one-line description of what your plugin does
-
-### `SKILL_DESCRIPTION_MISSING` / `SKILL_DESCRIPTION_STYLE`
-SKILL.md description is missing or doesn't follow the trigger-phrase convention.
-- **Why**: skills without third-person trigger descriptions undertrigger — Claude won't invoke them when needed
-- **Fix**: rewrite as `This skill should be used when the user asks to "<phrase>", "<phrase>", ...`
 
 ### `COMMAND_FRONTMATTER`
 A command file has frontmatter but it doesn't parse.

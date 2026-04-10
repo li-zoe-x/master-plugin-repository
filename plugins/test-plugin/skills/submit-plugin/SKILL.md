@@ -21,11 +21,11 @@ Confirm:
 
 If either check fails, stop and tell the user what's missing. Do not proceed.
 
-## 1. Inline sanity checks
+## 1. Inline format + quality checks (THE GATE)
 
-Run these checks against `PLUGIN_DIR`. Collect **every** problem, then report them all at once — don't bail on the first error.
+This is the **bootstrap** version of the gate — `test-plugin` ships before `official-plugins` does, so we don't have access to `${CLAUDE_PLUGIN_ROOT}/scripts/validate.mjs` here. Run these checks inline. Collect **every** problem, then report them all at once — don't bail on the first error. **Block submission on any error.**
 
-### 1a. plugin.json structural checks
+### 1a. plugin.json structural checks (FORMAT)
 
 - Read `PLUGIN_DIR/.claude-plugin/plugin.json`
 - Parse it as JSON. On parse error, record the error message verbatim.
@@ -34,23 +34,75 @@ Run these checks against `PLUGIN_DIR`. Collect **every** problem, then report th
 - Optional `version`, if present, should look like semver (`^\d+\.\d+\.\d+`)
 - The value of `name` **must equal** the leaf directory name of `PLUGIN_DIR` (e.g., plugin name `foo-bar` in `plugins/foo-bar/`). If not, record it.
 
-### 1b. Skills structural checks (if any)
+### 1b. Skills structural checks (FORMAT, if any)
 
 - If `PLUGIN_DIR/skills/` exists:
   - For every subdirectory `skills/<skill-name>/`, require a `SKILL.md` file inside.
   - Read each `SKILL.md`. The file must start with a YAML frontmatter block delimited by `---`.
   - The frontmatter must parse as YAML and must contain a `name` field.
-  - The `name` in the frontmatter should match `<skill-name>` (the directory name). Record a warning (not an error) if it doesn't.
+  - The `name` in the frontmatter should match `<skill-name>` (the directory name).
 
-### 1c. Path traversal check
+### 1c. Path traversal check (FORMAT)
 
 - Scan `plugin.json` for any value that is a string containing `..`. If found (e.g., `"skills": "../../evil"`), record it as an error.
 
-### 1d. Report
+### 1d. Quality gate: at least one component
 
-If any **errors** were found, print them grouped by category, with full file paths, and then **stop**. Tell the user to fix them and re-run the skill.
+Walk `PLUGIN_DIR` and confirm at least one of these exists:
+- `skills/<name>/SKILL.md` (any name)
+- `commands/*.md`
+- `agents/*.md`
+- `hooks/hooks.json`
+- `mcpServers` field set in plugin.json
+- `mcp.json` file
 
-If only warnings were found, print them and ask the user: "Proceed anyway? [yes/no]" via AskUserQuestion.
+If **none**: error `QUALITY_NO_COMPONENTS` — "plugin has zero components; a plugin without skills/commands/agents/hooks/MCP does nothing useful".
+
+### 1e. Quality gate: description length
+
+If `plugin.json.description` is a non-empty string but its length is **< 20 characters**, error: `QUALITY_DESCRIPTION_TOO_SHORT` — "description is too short to be useful in the marketplace UI; expand to a full sentence".
+
+### 1f. Quality gate: no unfilled template placeholders in plugin.json
+
+For every string value in plugin.json, check if it matches `\{\{[^}]+\}\}`. If yes, error: `QUALITY_TEMPLATE_PLACEHOLDER` — name the field and the placeholder, tell the user to fill it in.
+
+### 1g. Quality gate: no unfilled placeholders in SKILL.md descriptions
+
+For every `skills/<name>/SKILL.md` frontmatter, check if `description` contains `\{\{[^}]+\}\}`. If yes, error: `SKILL_DESCRIPTION_PLACEHOLDER`.
+
+### 1h. Quality gate: skill description style
+
+For every `skills/<name>/SKILL.md` frontmatter, check if `description` starts with (case-insensitive) `"This skill should be used when"`. If not, error: `SKILL_DESCRIPTION_STYLE` — "skill descriptions must follow the third-person trigger-phrase convention or they will undertrigger".
+
+### 1i. Quality gate: secret pattern scan
+
+Walk every file in `PLUGIN_DIR` with extension `.md`, `.json`, `.yaml`, `.yml`, `.sh`, `.py`, `.js`, `.ts`, `.mjs`, `.txt`, `.env`. Skip directories `.git/`, `node_modules/`, `examples/`, `templates/`. For each file, scan its contents for any of these patterns:
+
+- `sk-[a-zA-Z0-9]{20,}` — OpenAI API key
+- `sk-ant-[a-zA-Z0-9_-]{20,}` — Anthropic API key
+- `ghp_[a-zA-Z0-9]{30,}` — GitHub PAT
+- `github_pat_[a-zA-Z0-9_]{30,}` — GitHub fine-grained PAT
+- `AKIA[0-9A-Z]{16}` — AWS access key
+- `AIza[0-9A-Za-z_-]{30,}` — Google API key
+- `xox[baprs]-[a-zA-Z0-9-]{20,}` — Slack token
+- `eyJ[a-zA-Z0-9_-]{20,}\.eyJ[a-zA-Z0-9_-]{20,}\.[a-zA-Z0-9_-]{20,}` — JWT-looking
+
+If any match: error `QUALITY_SECRET_PATTERN` — name the file, line number, and the pattern matched. **Stop.** This is the single biggest reason a submission gets rejected for compliance.
+
+### 1j. Report and decide
+
+If **any errors** were found (format OR quality):
+
+1. Print every error in this format:
+   ```
+   BLOCKED  <file>:<line>  [<code>]
+            <message>
+            Why: <why>
+            Fix: <fix>
+   ```
+2. Print summary: `SUBMISSION BLOCKED — N errors. Fix every error and re-invoke me.`
+3. **STOP**. Do not proceed.
+4. Do **NOT** offer to bypass. Do **NOT** ask "proceed anyway?". The gate exists to protect the marketplace and OKX compliance.
 
 If everything is clean, say so briefly and continue to step 2.
 

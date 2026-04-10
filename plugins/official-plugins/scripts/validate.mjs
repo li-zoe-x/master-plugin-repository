@@ -32,6 +32,7 @@ const flags = {
   all: false,
   json: args.includes("--json"),
   quiet: args.includes("--quiet"),
+  strict: args.includes("--strict"),
   repoRoot: null,
 };
 
@@ -45,7 +46,7 @@ for (let i = 0; i < args.length; i++) {
   } else if (a === "--all") {
     flags.all = true;
     if (args[i + 1] && !args[i + 1].startsWith("--")) flags.repoRoot = args[++i];
-  } else if (a === "--json" || a === "--quiet") {
+  } else if (a === "--json" || a === "--quiet" || a === "--strict") {
     // already captured
   } else if (a === "--help" || a === "-h") {
     printHelp();
@@ -69,6 +70,9 @@ function printHelp() {
 Flags:
   --json     Emit one JSON object per finding (machine-readable)
   --quiet    Suppress success messages
+  --strict   Quality gate: also check no-components, descriptions, placeholders,
+             secrets; promote SKILL description-style warnings to errors.
+             Used by submit-plugin to block low-quality submissions.
   --help     Show this message
 
 Exit codes: 0 clean, 1 errors, 2 usage error
@@ -92,6 +96,15 @@ function err(file, line, code, message, why, fix) {
 }
 function warn(file, line, code, message, why, fix) {
   findings.push({ severity: "warning", file, line, code, message, why, fix });
+}
+// qualityErr emits as error in --strict mode (used by submit-plugin),
+// warning otherwise (used by package-plugin during iterative authoring)
+function qualityErr(file, line, code, message, why, fix) {
+  if (flags.strict) {
+    findings.push({ severity: "error", file, line, code, message, why, fix });
+  } else {
+    findings.push({ severity: "warning", file, line, code, message, why, fix });
+  }
 }
 
 // ---------- JSON loading with line tracking ----------
@@ -350,7 +363,7 @@ function checkPluginManifest(filePath, data, expectedName) {
       "use the format 'X.Y.Z', e.g., '0.1.0'");
   }
   if (typeof data.description !== "string" || data.description.length === 0) {
-    warn(filePath, 0, "PLUGIN_DESCRIPTION_MISSING",
+    qualityErr(filePath, 0, "PLUGIN_DESCRIPTION_MISSING",
       "plugin.json should include a 'description' field",
       "the marketplace UI shows description to users browsing plugins",
       "add a one-line description of what your plugin does");
@@ -392,16 +405,146 @@ function checkSkillFrontmatter(filePath, fmResult, expectedName) {
       `change frontmatter to 'name: ${expectedName}' or rename the directory`);
   }
   if (typeof data.description !== "string" || data.description.length === 0) {
-    warn(filePath, 0, "SKILL_DESCRIPTION_MISSING",
+    qualityErr(filePath, 0, "SKILL_DESCRIPTION_MISSING",
       "SKILL.md should have a 'description' field in its frontmatter",
       "skills without trigger descriptions undertrigger — Claude won't invoke them when needed",
       "add description starting with 'This skill should be used when the user asks to ...' and list concrete trigger phrases");
+  } else if (PLACEHOLDER_RE.test(data.description)) {
+    qualityErr(filePath, 0, "SKILL_DESCRIPTION_PLACEHOLDER",
+      `SKILL.md description still contains an unfilled {{placeholder}}`,
+      "the participant generated this skill from the SKILL.md template but forgot to fill in the description fields",
+      "replace every {{...}} marker in the description with concrete trigger phrases for this skill");
   } else if (!/this skill should be used when/i.test(data.description)) {
-    warn(filePath, 0, "SKILL_DESCRIPTION_STYLE",
+    qualityErr(filePath, 0, "SKILL_DESCRIPTION_STYLE",
       "SKILL.md description should start with 'This skill should be used when the user asks to ...'",
       "skill-creator's pushy third-person convention combats undertriggering — vague descriptions won't fire",
       "rewrite description as 'This skill should be used when the user asks to <phrase>, <phrase>, ...'");
   }
+}
+
+// ---------- quality gates (run when --strict, demoted to warnings otherwise) ----------
+//
+// Quality gates catch low-quality submissions that would technically validate
+// but waste reviewer time and clutter the marketplace. Run by submit-plugin
+// in --strict mode; surfaced as warnings (non-blocking) by package-plugin so
+// participants can iteratively fix during authoring.
+
+const PLACEHOLDER_RE = /\{\{[^}]+\}\}/;
+const SECRET_PATTERNS = [
+  { name: "OpenAI API key",   re: /sk-[a-zA-Z0-9]{20,}/ },
+  { name: "Anthropic API key", re: /sk-ant-[a-zA-Z0-9_-]{20,}/ },
+  { name: "GitHub PAT",       re: /ghp_[a-zA-Z0-9]{30,}/ },
+  { name: "GitHub fine-grained PAT", re: /github_pat_[a-zA-Z0-9_]{30,}/ },
+  { name: "AWS access key",   re: /AKIA[0-9A-Z]{16}/ },
+  { name: "Google API key",   re: /AIza[0-9A-Za-z_-]{30,}/ },
+  { name: "Slack token",      re: /xox[baprs]-[a-zA-Z0-9-]{20,}/ },
+  { name: "JWT-looking",      re: /eyJ[a-zA-Z0-9_-]{20,}\.eyJ[a-zA-Z0-9_-]{20,}\.[a-zA-Z0-9_-]{20,}/ },
+];
+const SCAN_EXTENSIONS = new Set([".md", ".json", ".yaml", ".yml", ".sh", ".py", ".js", ".ts", ".mjs", ".txt", ".env"]);
+const SKIP_DIRS = new Set([".git", "node_modules", "examples", "templates"]);
+
+function countComponents(absDir, manifest) {
+  let count = 0;
+  const skillsDir = join(absDir, "skills");
+  if (existsSync(skillsDir) && statSync(skillsDir).isDirectory()) {
+    for (const entry of readdirSync(skillsDir)) {
+      if (existsSync(join(skillsDir, entry, "SKILL.md"))) { count++; break; }
+    }
+  }
+  const commandsDir = join(absDir, "commands");
+  if (existsSync(commandsDir) && statSync(commandsDir).isDirectory()) {
+    if (readdirSync(commandsDir).some(f => f.endsWith(".md"))) count++;
+  }
+  const agentsDir = join(absDir, "agents");
+  if (existsSync(agentsDir) && statSync(agentsDir).isDirectory()) {
+    if (readdirSync(agentsDir).some(f => f.endsWith(".md"))) count++;
+  }
+  if (existsSync(join(absDir, "hooks", "hooks.json"))) count++;
+  if (manifest && manifest.hooks) count++;
+  if (existsSync(join(absDir, "mcp.json"))) count++;
+  if (existsSync(join(absDir, ".mcp.json"))) count++;
+  if (manifest && manifest.mcpServers) count++;
+  return count;
+}
+
+function walkFilesShallow(absDir, callback) {
+  // Walk plugin files for content scanning. Skip examples/, templates/,
+  // .git/, node_modules/, and binary-ish files.
+  function walk(dir) {
+    let entries;
+    try { entries = readdirSync(dir); } catch { return; }
+    for (const entry of entries) {
+      if (SKIP_DIRS.has(entry)) continue;
+      const full = join(dir, entry);
+      let st;
+      try { st = statSync(full); } catch { continue; }
+      if (st.isDirectory()) {
+        walk(full);
+      } else {
+        const dot = entry.lastIndexOf(".");
+        const ext = dot === -1 ? "" : entry.slice(dot).toLowerCase();
+        if (SCAN_EXTENSIONS.has(ext)) callback(full);
+      }
+    }
+  }
+  walk(absDir);
+}
+
+function checkPluginQuality(pluginDir, manifest) {
+  const absDir = resolve(pluginDir);
+  const manifestPath = join(absDir, ".claude-plugin", "plugin.json");
+
+  // Quality gate: at least one component
+  const componentCount = countComponents(absDir, manifest);
+  if (componentCount === 0) {
+    qualityErr(manifestPath, 0, "QUALITY_NO_COMPONENTS",
+      "plugin has zero components — no skills, commands, agents, hooks, or MCP servers detected",
+      "a plugin without any components does nothing useful and clutters the marketplace",
+      "add at least one of: skills/<name>/SKILL.md, commands/<name>.md, agents/<name>.md, hooks/hooks.json, or an mcpServers field in plugin.json");
+  }
+
+  // Quality gate: description length
+  if (manifest && typeof manifest.description === "string" && manifest.description.length > 0 && manifest.description.length < 20) {
+    qualityErr(manifestPath, 0, "QUALITY_DESCRIPTION_TOO_SHORT",
+      `plugin.json description is only ${manifest.description.length} characters — too short to be useful`,
+      "the marketplace UI shows description to participants browsing plugins; one-word descriptions don't help anyone decide whether to install",
+      "expand to a full sentence (~20-100 chars) describing what the plugin does and who should install it");
+  }
+
+  // Quality gate: no template placeholders left in plugin.json
+  if (manifest) {
+    for (const [k, v] of Object.entries(manifest)) {
+      if (typeof v === "string" && PLACEHOLDER_RE.test(v)) {
+        qualityErr(manifestPath, 0, "QUALITY_TEMPLATE_PLACEHOLDER",
+          `plugin.json field '${k}' still contains a {{placeholder}} (value: ${v})`,
+          "the participant generated this from a template but forgot to fill in the field",
+          `replace the {{placeholder}} in '${k}' with a real value before submitting`);
+      }
+    }
+  }
+
+  // Quality gate: scan files for known secret patterns.
+  // We deliberately do NOT scan for {{placeholder}} patterns in arbitrary files
+  // because legitimate documentation often mentions the literal placeholder syntax;
+  // the high-value placeholder check happens on plugin.json fields above (and on
+  // SKILL.md description fields inside checkSkillFrontmatter).
+  walkFilesShallow(absDir, (file) => {
+    let text;
+    try { text = readFileSync(file, "utf8"); } catch { return; }
+    // Skip very large files (>1MB) — likely binary or generated
+    if (text.length > 1024 * 1024) return;
+    for (const { name, re } of SECRET_PATTERNS) {
+      const m = text.match(re);
+      if (m) {
+        const idx = text.indexOf(m[0]);
+        const line = text.slice(0, idx).split("\n").length;
+        qualityErr(file, line, "QUALITY_SECRET_PATTERN",
+          `looks like an embedded secret: ${name} pattern detected`,
+          "secrets in committed plugin files leak credentials and violate OKX compliance — this is the single biggest reason a submission gets rejected",
+          `remove the secret from this file. If you need to reference a secret at runtime, read it from an environment variable instead of hardcoding`);
+      }
+    }
+  });
 }
 
 // ---------- plugin directory walker ----------
@@ -413,6 +556,7 @@ function checkPluginDirectory(pluginDir) {
 
   const data = loadJSON(manifestPath);
   if (data) checkPluginManifest(manifestPath, data, dirName);
+  if (data) checkPluginQuality(absDir, data);
 
   // Walk skills
   const skillsDir = join(absDir, "skills");
