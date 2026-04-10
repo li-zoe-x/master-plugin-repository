@@ -117,7 +117,32 @@ For external modes, additionally collect:
 - **Whole-repo**: `url` (the https git URL) and `sha` (run `git rev-parse HEAD` if you detected a remote, or ask)
 - **Subdir**: `url`, `path` (subdirectory), `ref` (branch/tag, default `main`), `sha`
 
-## 5. Preflight: gh CLI
+## 5. Dry-run check (BEFORE gh preflight — dry-run does not need gh)
+
+Ask the participant: "Do you want a **dry run** first? I'll build the marketplace entry, validate it against the live marketplace.json (catching duplicate names and other conflicts), show the planned commit message and PR title/body, but stop without forking or pushing anything. Recommended for first-time submitters."
+
+If yes (dry-run mode):
+
+1. Fetch the live `marketplace.json` from GitHub via `git ls-remote` + a sparse clone, or via direct file read if you have a local clone of the marketplace. As a fallback, `curl -fsSL https://raw.githubusercontent.com/mastersamasama/master-plugin-repository/main/.claude-plugin/marketplace.json` to grab it.
+2. Construct the marketplace entry as JSON (the shape depends on submission mode — see step 9 below for the three shapes).
+3. Build a temporary copy of the marketplace.json with the new entry appended.
+4. Run the validator against the temp file. Pass `--no-source-check` because the temp dir won't have the actual plugin subdirectories — that check would false-positive at this stage:
+   ```
+   node ${CLAUDE_PLUGIN_ROOT}/scripts/validate.mjs --marketplace <temp-dir> --no-source-check
+   ```
+   The validator will catch `PLUGIN_NAME_DUPLICATE` and any other marketplace-level structural issues.
+5. If errors: print them in BLOCKED format (same as step 1), tell the participant to fix and re-run. **Stop.**
+6. If clean: show the participant:
+   - The new marketplace entry JSON
+   - The 1-line `git commit -m` message that would be used
+   - The PR title and body that would be opened
+   - The list of files that would be modified (just `marketplace.json` for external modes; that file plus `plugins/<name>/...` for monorepo mode)
+7. Tell the user: "Dry run complete. Re-invoke me without dry-run intent when ready to actually fork and push."
+8. **Stop.** Do not proceed to gh preflight or any of the later steps.
+
+If no (real submission), continue to step 6.
+
+## 6. Preflight: gh CLI (real submission only — dry-run skips this)
 
 Run via Bash:
 
@@ -127,22 +152,10 @@ gh auth status
 ```
 
 If `gh` is not installed:
-- Stop. Print: "Install GitHub CLI from https://cli.github.com/, then run `gh auth login` and re-invoke this skill."
+- Stop. Print: "Install GitHub CLI from https://cli.github.com/, then run `gh auth login` and re-invoke this skill. (If you only want a dry-run preview, re-invoke me with dry-run intent — gh isn't needed for that.)"
 
 If not authenticated:
 - Stop. Print: "Run `gh auth login` to authenticate, then re-invoke this skill."
-
-## 6. Dry-run check
-
-Ask the participant: "Do you want a **dry run** first? I'll build the marketplace.json diff and show the planned PR title/body without forking or pushing anything."
-
-If yes:
-- Construct the marketplace entry as JSON
-- Read the current `marketplace.json` (from a fresh clone or `gh api`) — actually for dry-run, just SHOW what the new entry would look like and where it would be inserted
-- Show the planned commit message and PR title/body
-- Stop. Tell the user: "Dry run complete. Re-invoke me with 'real submit' when ready."
-
-If no, continue.
 
 ## 7. Pick working directory
 

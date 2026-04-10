@@ -33,6 +33,7 @@ const flags = {
   json: args.includes("--json"),
   quiet: args.includes("--quiet"),
   strict: args.includes("--strict"),
+  noSourceCheck: args.includes("--no-source-check"),
   repoRoot: null,
 };
 
@@ -46,7 +47,7 @@ for (let i = 0; i < args.length; i++) {
   } else if (a === "--all") {
     flags.all = true;
     if (args[i + 1] && !args[i + 1].startsWith("--")) flags.repoRoot = args[++i];
-  } else if (a === "--json" || a === "--quiet" || a === "--strict") {
+  } else if (a === "--json" || a === "--quiet" || a === "--strict" || a === "--no-source-check") {
     // already captured
   } else if (a === "--help" || a === "-h") {
     printHelp();
@@ -73,6 +74,11 @@ Flags:
   --strict   Quality gate: also check no-components, descriptions, placeholders,
              secrets; promote SKILL description-style warnings to errors.
              Used by submit-plugin to block low-quality submissions.
+  --no-source-check
+             Skip the source-directory existence check on string sources.
+             Used by submit-plugin's dry-run mode to validate a synthetic
+             merged marketplace.json without false positives from missing
+             plugin subdirectories at the temp location.
   --help     Show this message
 
 Exit codes: 0 clean, 1 errors, 2 usage error
@@ -294,7 +300,7 @@ function checkPluginSource(filePath, idx, p) {
         "path traversal in marketplace sources is a security risk",
         "use a path relative to the repo root that stays inside it");
     }
-    if (!existsSync(targetManifest)) {
+    if (!flags.noSourceCheck && !existsSync(targetManifest)) {
       err(filePath, 0, "SOURCE_DIR_MISSING",
         `plugins[${idx}] (${p.name}) source "${src}" → ${relative(repoRoot, targetManifest)} does not exist`,
         "marketplace entries with string sources must point at a real plugin dir",
