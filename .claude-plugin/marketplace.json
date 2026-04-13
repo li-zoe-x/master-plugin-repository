@@ -9,22 +9,6 @@
   },
   "plugins": [
     {
-      "name": "test-plugin",
-      "description": "Bootstrap plugin — contains submit-plugin skill used to onboard real plugins into the marketplace. Kept as a minimal reference submission.",
-      "version": "0.1.0",
-      "author": {
-        "name": "mastersamasama"
-      },
-      "category": "development",
-      "keywords": [
-        "bootstrap",
-        "internal",
-        "okx",
-        "hackathon"
-      ],
-      "source": "./plugins/test-plugin"
-    },
-    {
       "name": "official-plugins",
       "description": "Official OKX hackathon tools — package any combination of skills, commands, agents, hooks, scripts, or MCP configs into a Claude Code plugin and submit it to this marketplace",
       "version": "0.1.0",
