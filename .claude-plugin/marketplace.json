@@ -66,6 +66,30 @@
       }
     },
     {
+      "name": "doraemon",
+      "description": "Decentralized AI gateway — access 18 frontier models (Claude, GPT-4o, Gemini, DeepSeek, Grok, and more) by paying in USDG on X Layer. No API keys, no accounts, no geo-restrictions.",
+      "version": "1.0.0",
+      "author": {
+        "name": "YunanL"
+      },
+      "category": "development",
+      "keywords": [
+        "ai-gateway",
+        "x402",
+        "usdg",
+        "decentralized",
+        "llm",
+        "okx",
+        "xlayer",
+        "hackathon"
+      ],
+      "source": {
+        "source": "url",
+        "url": "https://github.com/YunanL/doraemon.git",
+        "sha": "10aa3ca2f0b68ebeb4cbe98e2b6c489b45ff05df"
+      }
+    },
+    {
       "name": "onchain-arb",
       "description": "CEX-DEX and cross-chain arbitrage opportunity detector powered by onchainOS data",
       "version": "0.1.0",
